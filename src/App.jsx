@@ -1,37 +1,71 @@
 import { useState } from "react";
 import { API_KEY, scanWorksheet, gradeAnswers } from "./services/ai";
-import { fileToBase64 } from "./utils/image";
+import { fileToBase64, pdfToBase64List } from "./utils/image";
 import { gradeOf } from "./utils/grade";
 import Loading from "./components/Loading";
 import InfoScreen from "./components/InfoScreen";
 import QuizScreen from "./components/QuizScreen";
 import ResultScreen from "./components/ResultScreen";
 
-// "a|b" -> "a, b"
+const MAX_PAGES = 6;
+const isPdf = (f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
 const tidy = (v = "") => v.split("|").filter(Boolean).join(", ");
 
 export default function App() {
   const [step, setStep] = useState("info");
-const [info, setInfo] = useState({ name: "", cls: "1", book: "", story: "" });
+  const [info, setInfo] = useState({ name: "", cls: "1", book: "", story: "" });
+  const [pages, setPages] = useState([]);
+  const [busy, setBusy] = useState(false);
   const [paper, setPaper] = useState(null);
   const [answers, setAnswers] = useState({});
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
 
-  async function handleUpload(e) {
-    const file = e.target.files[0];
-    if (!file) return;
+  async function handleAdd(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    setError("");
+    setBusy(true);
+    try {
+      const added = [];
+      for (const f of files) {
+        if (isPdf(f)) {
+          const list = await pdfToBase64List(f, MAX_PAGES);
+          list.forEach((b64, i) =>
+            added.push({ id: `${Date.now()}-${Math.random()}`, name: `${f.name} p${i + 1}`, b64 })
+          );
+        } else {
+          added.push({ id: `${Date.now()}-${Math.random()}`, name: f.name, b64: await fileToBase64(f) });
+        }
+      }
+      const all = [...pages, ...added];
+      if (all.length > MAX_PAGES) setError(`Only the first ${MAX_PAGES} pages are used.`);
+      setPages(all.slice(0, MAX_PAGES));
+    } catch (err) {
+      setError(err.message || "Could not read this file.");
+    }
+    setBusy(false);
+  }
+
+  const handleRemove = (id) => setPages((prev) => prev.filter((p) => p.id !== id));
+
+  async function handleStart() {
     if (!API_KEY) {
       setError("API key missing. Add VITE_API_KEY in .env and restart.");
       return;
     }
+    if (!pages.length) return;
     setError("");
     setMsg("Reading your worksheet... 🔍");
     setStep("loading");
     try {
-      const b64 = await fileToBase64(file);
-      const data = await scanWorksheet(b64, info);
+      const data = await scanWorksheet(
+        pages.map((p) => p.b64),
+        info,
+        setMsg
+      );
       setPaper(data);
       setAnswers({});
       setStep("quiz");
@@ -70,6 +104,7 @@ const [info, setInfo] = useState({ name: "", cls: "1", book: "", story: "" });
 
   function handleReset() {
     setStep("info");
+    setPages([]);
     setPaper(null);
     setResult(null);
     setAnswers({});
@@ -78,7 +113,18 @@ const [info, setInfo] = useState({ name: "", cls: "1", book: "", story: "" });
   if (step === "loading") return <Loading message={msg} />;
 
   if (step === "info")
-    return <InfoScreen info={info} setInfo={setInfo} error={error} onUpload={handleUpload} />;
+    return (
+      <InfoScreen
+        info={info}
+        setInfo={setInfo}
+        pages={pages}
+        busy={busy}
+        error={error}
+        onAdd={handleAdd}
+        onRemove={handleRemove}
+        onStart={handleStart}
+      />
+    );
 
   if (step === "quiz")
     return (

@@ -1,5 +1,6 @@
-export default function InfoScreen({ info, setInfo, error, onUpload }) {
+export default function InfoScreen({ info, setInfo, pages, busy, error, onAdd, onRemove, onStart }) {
   const ready = info.name.trim() && info.cls;
+  const canAdd = ready && !busy;
 
   return (
     <div className="app">
@@ -35,10 +36,40 @@ export default function InfoScreen({ info, setInfo, error, onUpload }) {
           value={info.story}
           onChange={(e) => setInfo({ ...info, story: e.target.value })}
         />
-        <label className={`upload ${ready ? "" : "off"}`}>
-          📸 Upload Worksheet
-          <input type="file" accept="image/*" className="hidden" disabled={!ready} onChange={onUpload} />
+
+        <label className={`upload ${canAdd ? "" : "off"}`}>
+          {busy ? "⏳ Getting pages ready..." : pages.length ? "➕ Add more pages" : "📸 Add worksheet pages"}
+          <input
+            type="file"
+            accept="image/*,application/pdf"
+            multiple
+            className="hidden"
+            disabled={!canAdd}
+            onChange={onAdd}
+          />
         </label>
+        <p className="hint">Photos or PDF. Add pages in order (up to 6).</p>
+
+        {pages.length > 0 && (
+          <div className="thumbs">
+            {pages.map((p, i) => (
+              <div className="thumb" key={p.id}>
+                <img src={`data:image/jpeg;base64,${p.b64}`} alt={`Page ${i + 1}`} />
+                <span className="tn">{i + 1}</span>
+                <button type="button" className="tx" onClick={() => onRemove(p.id)} aria-label="Remove page">✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {pages.length > 0 && (
+          <div className="center">
+            <button className="btn green" disabled={busy} onClick={onStart}>
+              Start ✨ ({pages.length} page{pages.length > 1 ? "s" : ""})
+            </button>
+          </div>
+        )}
+
         {!ready && <p className="center">Type your name first 😊</p>}
         {error && <p className="err">⚠️ {error}</p>}
       </div>

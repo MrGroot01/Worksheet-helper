@@ -108,20 +108,34 @@ async function solve(paper, info) {
   return map;
 }
 
-export async function scanWorksheet(base64, info = {}) {
-  const paper = await callGroq([
-    { type: "text", text: EXTRACT_PROMPT },
-    { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}` } },
-  ]);
+export async function scanWorksheet(pages, info = {}, onProgress = () => {}) {
+  const sections = [];
+  let title = "";
 
-  paper.sections = (paper.sections || []).map((s, si) => ({
-    ...s,
-    questions: (s.questions || []).map((q, qi) => ({ ...q, id: `s${si}q${qi}` })),
-  }));
+  for (let i = 0; i < pages.length; i++) {
+    onProgress(`Reading page ${i + 1} of ${pages.length}... 🔍`);
+    const part = await callGroq([
+      { type: "text", text: EXTRACT_PROMPT },
+      { type: "image_url", image_url: { url: `data:image/jpeg;base64,${pages[i]}` } },
+    ]);
+    if (!title && part.title) title = part.title;
+    (part.sections || []).forEach((s) => sections.push(s));
+  }
 
-  if (!paper.sections.some((s) => s.questions.length))
+  const paper = {
+    title,
+    sections: sections
+      .filter((s) => (s.questions || []).length)
+      .map((s, si) => ({
+        ...s,
+        questions: s.questions.map((q, qi) => ({ ...q, id: `s${si}q${qi}` })),
+      })),
+  };
+
+  if (!paper.sections.length)
     throw new Error("Could not read any questions. Try a clearer, straight photo.");
 
+  onProgress("Making the answer key... 🧠");
   const answers = await solve(paper, info);
   paper.sections.forEach((s) =>
     s.questions.forEach((q) => {
