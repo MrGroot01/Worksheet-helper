@@ -1,4 +1,7 @@
-const MODEL = import.meta.env.VITE_GEMINI_MODEL || "gemini-3.8-flash";
+const MODELS = [
+  import.meta.env.VITE_GEMINI_MODEL || "gemini-3.8-flash",
+  "gemini-3.7-flash", // backup when the main model is busy
+];
 export const API_KEY = import.meta.env.VITE_API_KEY;
 
 function contextText(info = {}) {
@@ -53,39 +56,51 @@ function extractJson(text) {
 
 let notify = () => {};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const BUSY = [429, 500, 502, 503, 504];
 
-async function callGemini(parts, tries = 4) {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": API_KEY },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          temperature: 0.2,
-          thinkingConfig: { thinkingLevel: "low" },
-        },
-      }),
+async function callGemini(parts) {
+  let lastMsg = "";
+  for (let round = 0; round < 3; round++) {
+    let wait = 10 + round * 10;
+
+    for (const model of MODELS) {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-goog-api-key": API_KEY },
+          body: JSON.stringify({
+            contents: [{ parts }],
+            generationConfig: {
+              responseMimeType: "application/json",
+              temperature: 0.2,
+              thinkingConfig: { thinkingLevel: "low" },
+            },
+          }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        const text = (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
+        return extractJson(text);
+      }
+
+      lastMsg = data.error?.message || "API error";
+      if (!BUSY.includes(res.status)) throw new Error(lastMsg); // a real error: show it
+
+      const m = /retry in ([\d.]+)s/i.exec(lastMsg);
+      if (m) wait = Math.min(Math.ceil(parseFloat(m[1])) + 1, 60);
+      // busy: try the next model straight away
     }
-  );
-  const data = await res.json();
 
-  // busy or free limit: wait a little, then try again
-  if ((res.status === 429 || res.status === 503) && tries > 0) {
-    const m = /retry in ([\d.]+)s/i.exec(data.error?.message || "");
-    const wait = Math.min(Math.ceil(m ? parseFloat(m[1]) : 8) + 1, 60);
+    // every model was busy: rest, then try again
     for (let s = wait; s > 0; s--) {
-      notify(`Taking a short rest ⏳ ${s}s`);
+      notify(`The AI is busy, trying again ⏳ ${s}s`);
       await sleep(1000);
     }
-    return callGemini(parts, tries - 1);
   }
-
-  if (!res.ok) throw new Error(data.error?.message || "API error");
-  const text = (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
-  return extractJson(text);
+  throw new Error("The AI is very busy right now. Please press Start again in a minute.");
 }
 
 export async function scanWorksheet(pages, info = {}, onProgress = () => {}, bookPages = []) {
