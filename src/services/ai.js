@@ -1,14 +1,41 @@
-const MODEL = import.meta.env.VITE_MODEL || "qwen/qwen3.8-27b";
+const MODEL = import.meta.env.VITE_GEMINI_MODEL || "gemini-3.8-flash";
 export const API_KEY = import.meta.env.VITE_API_KEY;
 
-const EXTRACT_PROMPT = `This is a school worksheet photo (young children, English). Rebuild it as a BLANK worksheet. IGNORE any handwritten answers, ticks or lines drawn by a student. Do NOT solve anything.
+function contextText(info = {}) {
+  const lines = [
+    `This worksheet is for CBSE Class ${info.cls || "1"} in India (young children).`,
+  ];
+  if (info.book?.trim()) lines.push(`Book / lesson: ${info.book.trim()}.`);
+  if (info.story?.trim()) lines.push(`Lesson text from the book:\n"""\n${info.story.trim()}\n"""`);
+  return lines.join("\n");
+}
+
+function scanPrompt(info = {}, nWork = 1, nBook = 0) {
+  const hasSource = !!info.story?.trim() || nBook > 0;
+  return `${contextText(info)}
+
+Images 1 to ${nWork} are the pages of one school worksheet, in order.${
+    nBook > 0 ? ` Images ${nWork + 1} to ${nWork + nBook} are pages from the child's TEXTBOOK lesson.` : ""
+  }
+Rebuild the worksheet as a BLANK one (IGNORE any handwritten answers, ticks, circles or lines drawn by a student) and ALSO solve every question yourself. Never leave an answer empty.
+Think like the textbook and like a young child, not like a general adult. Keep answers short and in simple words.
 Return ONLY JSON:
-{"title":"","sections":[{"title":"section heading with instruction","type":"match|fill|short","wordBox":["..."],"options":["..."],"emojis":{"Hand":"✋"},"questions":[{"text":"question text"}]}]}
+{"title":"","sections":[{"title":"section heading with instruction","type":"match|fill|short","wordBox":["..."],"options":["..."],"emojis":{"Hand":"✋"},"questions":[{"text":"question text","answer":"correct answer","open":false,"count":1}]}]}
 Rules:
 - Do NOT put question numbers inside "text".
-- match: "options" = right column words; each question text = left word. "emojis" = one fitting emoji for EVERY left and right word (key = the exact word).
-- fill: put "____" exactly where the blank is and keep the rest of the sentence. If a word box exists put it in "wordBox".
-- short: questions that need a written answer, including write-the-rhyming-word and write-5-items type questions (use "____" if there is a blank).`;
+- match: "options" = right column words; each question text = left word; answer = EXACTLY one word from "options", each option used only once, matched by meaning.
+- fill: put "____" exactly where the blank is and keep the rest of the sentence. If a word box exists put it in "wordBox" and answer = EXACTLY a word or letter from it. For a letter blank (like "____ air") answer = only the missing letter(s). If one question has several blanks, answer = the missing values in order separated by | (example: 2|5).
+- short: questions that need a written answer, including number names, True/False (answer T or F) and rearrange-the-letters type questions. One correct answer: write it briefly.
+- OPEN questions have MANY correct answers: rhyming words (example: "Pan -- ____"), "write 5 food items you like", "your favourite ...", "write a word that starts with...". For these set "open": true, give up to 3 example answers separated by commas in "answer" (example: "fan, man, can"), and use type short (or fill with a blank).
+- "Write N items" questions (like "Write the names of 5 food items that you like to eat", even if the page shows N numbered lines): make ONE question only, with "open": true and "count": N. Do not make N separate questions.
+- Maths: work out every sum carefully and double-check it. Write number names in simple lowercase words (example: forty-two).
+- Picture questions (count and circle, big or small, tall or short, shapes, colouring, circle the group): the child can look at the original page, so write the question in words (example: "How many books are there?" or "Which group has more, 1 or 2?") as type short and give the answer.
+- Questions about a story or lesson: ${
+    hasSource
+      ? "answer ONLY from the lesson text / textbook pages, using the exact words and names written there (for example the exact place name like Tamil Nadu, never a general word like village or city). Do not add (guess)."
+      : 'there is no textbook, so give the most likely answer a CBSE Class 1 book would use, with specific names, and start it with "(guess) ".'
+  }`;
+}
 
 function extractJson(text) {
   const clean = text.replace(/<think>[\s\S]*?<\/think>/g, "");
@@ -21,155 +48,82 @@ function extractJson(text) {
 let notify = () => {};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function callGroq(content, tries = 6) {
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [{ role: "user", content }],
-      response_format: { type: "json_object" },
-      max_completion_tokens: 8000,
-    }),
-  });
+async function callGemini(parts, tries = 4) {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": API_KEY },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.2,
+          thinkingConfig: { thinkingLevel: "low" },
+        },
+      }),
+    }
+  );
   const data = await res.json();
 
-  // free-tier limit: wait the time Groq asks for, then try again
-  if (res.status === 429 && tries > 0) {
-    const m = /try again in (?:(\d+)m)?([\d.]+)s/i.exec(data.error?.message || "");
-    const secs = m ? Number(m[1] || 0) * 60 + parseFloat(m[2]) : 20;
-    const wait = Math.min(Math.ceil(secs) + 2, 65);
+  // busy or free limit: wait a little, then try again
+  if ((res.status === 429 || res.status === 503) && tries > 0) {
+    const m = /retry in ([\d.]+)s/i.exec(data.error?.message || "");
+    const wait = Math.min(Math.ceil(m ? parseFloat(m[1]) : 8) + 1, 60);
     for (let s = wait; s > 0; s--) {
-      notify(`Taking a short rest, free limit ⏳ ${s}s`);
+      notify(`Taking a short rest ⏳ ${s}s`);
       await sleep(1000);
     }
-    return callGroq(content, tries - 1);
+    return callGemini(parts, tries - 1);
   }
 
   if (!res.ok) throw new Error(data.error?.message || "API error");
-  return extractJson(data.choices?.[0]?.message?.content || "");
+  const text = (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
+  return extractJson(text);
 }
 
-// accepts {"answers":[{id,answer}]} or {"answers":{id:answer}} or {id:answer}
-function toMap(out) {
-  const src = out?.answers ?? out ?? {};
-  const map = {};
-  if (Array.isArray(src)) {
-    src.forEach((a) => {
-      if (a && a.id !== undefined) map[a.id] = String(a.answer ?? "").trim();
-    });
-  } else {
-    Object.entries(src).forEach(([k, v]) => {
-      map[k] = String(v ?? "").trim();
-    });
-  }
-  return map;
-}
-
-function contextText(info = {}) {
-  const lines = [
-    `This worksheet is from an English textbook for CBSE Class ${info.cls || "1"} in India (young children).`,
-  ];
-  if (info.book?.trim()) lines.push(`Book / lesson: ${info.book.trim()}.`);
-  if (info.story?.trim()) lines.push(`Lesson text from the book:\n"""\n${info.story.trim()}\n"""`);
-  return lines.join("\n");
-}
-
-async function solveOnce(paper, info) {
-  const input = paper.sections.map((s) => ({
-    title: s.title,
-    type: s.type,
-    wordBox: s.wordBox || [],
-    options: s.options || [],
-    questions: s.questions.map((q) => ({ id: q.id, text: q.text })),
-  }));
-  const hasStory = !!info?.story?.trim();
-
-  const out = await callGroq([
-    {
-      type: "text",
-      text: `You are a careful English teacher. Solve EVERY question on this worksheet. Never leave an answer empty.
-${contextText(info)}
-Return ONLY JSON in this exact shape: {"answers":[{"id":"s0q0","answer":"..."}]} with one entry for every question id.
-Rules:
-- match: answer = EXACTLY one word from that section's "options". Each option is used only once. Match by meaning (body part to clothing/item, animal, fruit, flower, vegetable...).
-- fill with a wordBox: answer = EXACTLY the word or letter from the wordBox.
-- fill with a letter blank (like "____ air"): answer = only the missing letter(s) so the word is spelled correctly. If a wordBox has letters, answer must be one of them.
-- short with exactly one correct answer: write the short answer.
-- OPEN questions (many answers possible, like rhyming words, "write 5 food items", "your favourite..."): start with "e.g. " and give an example.
-- Questions about a story or lesson: ${
-        hasStory
-          ? "answer ONLY from the lesson text above, in a short simple sentence. Do not add (guess)."
-          : "use the book/lesson name and your knowledge of common CBSE Class 1 English lessons. If you are not sure, give the most likely short answer and start it with \"(guess) \"."
-      }
-Worksheet:
-${JSON.stringify(input)}`,
-    },
-  ]);
-
-  return toMap(out);
-}
-
-async function solve(paper, info) {
-  const total = paper.sections.reduce((n, s) => n + s.questions.length, 0);
-  let map = await solveOnce(paper, info);
-  const filled = (m) => Object.values(m).filter(Boolean).length;
-  if (filled(map) < total * 0.8) {
-    const second = await solveOnce(paper, info); // one retry
-    if (filled(second) > filled(map)) map = second;
-  }
-  return map;
-}
-
-export async function scanWorksheet(pages, info = {}, onProgress = () => {}) {
+export async function scanWorksheet(pages, info = {}, onProgress = () => {}, bookPages = []) {
   notify = onProgress;
-  const sections = [];
-  let title = "";
+  onProgress("Reading your worksheet... 🔍");
 
-  for (let i = 0; i < pages.length; i++) {
-    onProgress(`Reading page ${i + 1} of ${pages.length}... 🔍`);
-    const part = await callGroq([
-      { type: "text", text: EXTRACT_PROMPT },
-      { type: "image_url", image_url: { url: `data:image/jpeg;base64,${pages[i]}` } },
-    ]);
-    if (!title && part.title) title = part.title;
-    (part.sections || []).forEach((s) => sections.push(s));
-  }
+  const img = (b64) => ({ inline_data: { mime_type: "image/jpeg", data: b64 } });
+  const parts = [
+    ...pages.map(img),
+    ...bookPages.map(img),
+    { text: scanPrompt(info, pages.length, bookPages.length) },
+  ];
+  const raw = await callGemini(parts);
 
   const paper = {
-    title,
-    sections: sections
+    title: raw.title || "",
+    sections: (raw.sections || [])
       .filter((s) => (s.questions || []).length)
       .map((s, si) => ({
         ...s,
-        questions: s.questions.map((q, qi) => ({ ...q, id: `s${si}q${qi}` })),
+        questions: s.questions.map((q, qi) => {
+          let answer = String(q.answer ?? "").trim() || "(guess) ";
+          // open questions: keep the "e.g." marker so any valid answer is accepted
+          if (q.open && !/^e\.g\./i.test(answer)) answer = `e.g. ${answer}`;
+          return { ...q, id: `s${si}q${qi}`, answer, count: Number(q.count) || 1 };
+        }),
       })),
   };
 
   if (!paper.sections.length)
     throw new Error("Could not read any questions. Try a clearer, straight photo.");
-
-  onProgress("Making the answer key... 🧠");
-  const answers = await solve(paper, info);
-  paper.sections.forEach((s) =>
-    s.questions.forEach((q) => {
-      q.answer = answers[q.id] || "(guess) ";
-    })
-  );
   return paper;
 }
 
 export function gradeAnswers(items) {
-  return callGroq([
+  return callGemini([
     {
-      type: "text",
       text: `You are a kind teacher marking answers from a young child. Ignore capitalization, small spelling slips and punctuation; accept answers with the same meaning.
-- If "correct" starts with "e.g." it is only an example: mark the student correct if their answer is any valid answer for the question (for example any real rhyming word, or any real food item).
+- If "correct" starts with "e.g." the question is OPEN: the text after it is only an example. Mark the student correct if their answer is ANY valid answer for the question.
+  - Rhyming words: correct if it is a real word that rhymes with the given word (same ending sound, for example pan: man, fan, can, ran, van) and is not the same word.
+  - "Write N items" questions (like 5 food items): the student writes all items in one box, usually with commas. Correct only if they wrote N real, different items that fit the question.
+  - Other open questions: any sensible, real answer that fits the question.
 - If "correct" starts with "(guess)" it is only a likely answer: mark the student correct if their answer is a sensible, meaningful answer for that question (it can differ from the guess). Random letters, nonsense, off-topic text or a blank are wrong.
-- Otherwise compare with "correct".
+- Otherwise the answer comes from the book or from maths: mark correct only if the student's answer means the same as "correct" (numbers, names and places must match).
 - A blank student answer is always wrong.
 Return ONLY JSON: {"results":[{"id":"","correct":true}]}
 ${JSON.stringify(items)}`,

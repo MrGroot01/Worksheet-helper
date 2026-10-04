@@ -1,3 +1,4 @@
+import { useState } from "react";
 import MatchSection from "./MatchSection";
 import FillSection from "./FillSection";
 import ShortSection from "./ShortSection";
@@ -5,7 +6,8 @@ import ShortSection from "./ShortSection";
 const COLORS = ["#7c3aed", "#ec4899", "#f59e0b", "#10b981", "#3b82f6", "#ef4444"];
 const ICONS = { match: "🔗", fill: "✏️", short: "💬" };
 
-export default function QuizScreen({ paper, info, answers, setAnswers, error, onSubmit }) {
+export default function QuizScreen({ paper, info, pages = [], answers, setAnswers, error, onSubmit }) {
+  const [peek, setPeek] = useState(false);
   const all = paper.sections.flatMap((s) => s.questions);
   const done = all.filter((q) => (answers[q.id] || "").replace(/\|/g, "").trim()).length;
   const pct = all.length ? done / all.length : 0;
@@ -49,6 +51,20 @@ export default function QuizScreen({ paper, info, answers, setAnswers, error, on
       <div className="center">
         <button className="btn green" onClick={onSubmit}>Submit ✅</button>
       </div>
+
+      {pages.length > 0 && (
+        <button type="button" className="peek" onClick={() => setPeek(true)}>🖼️ Worksheet</button>
+      )}
+      {peek && (
+        <div className="modal" onClick={() => setPeek(false)}>
+          <div className="modal-body" onClick={(e) => e.stopPropagation()}>
+            <button type="button" className="btn" onClick={() => setPeek(false)}>✖ Close</button>
+            {pages.map((p, i) => (
+              <img key={p.id} src={`data:image/jpeg;base64,${p.b64}`} alt={`Worksheet page ${i + 1}`} />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

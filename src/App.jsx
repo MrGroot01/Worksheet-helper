@@ -15,6 +15,7 @@ export default function App() {
   const [step, setStep] = useState("info");
   const [info, setInfo] = useState({ name: "", cls: "1", book: "", story: "" });
   const [pages, setPages] = useState([]);
+  const [bookPages, setBookPages] = useState([]);
   const [busy, setBusy] = useState(false);
   const [paper, setPaper] = useState(null);
   const [answers, setAnswers] = useState({});
@@ -22,10 +23,12 @@ export default function App() {
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
 
-  async function handleAdd(e) {
+  async function handleAdd(e, kind = "work") {
     const files = Array.from(e.target.files || []);
     e.target.value = "";
     if (!files.length) return;
+    const current = kind === "book" ? bookPages : pages;
+    const setter = kind === "book" ? setBookPages : setPages;
     setError("");
     setBusy(true);
     try {
@@ -40,16 +43,17 @@ export default function App() {
           added.push({ id: `${Date.now()}-${Math.random()}`, name: f.name, b64: await fileToBase64(f) });
         }
       }
-      const all = [...pages, ...added];
+      const all = [...current, ...added];
       if (all.length > MAX_PAGES) setError(`Only the first ${MAX_PAGES} pages are used.`);
-      setPages(all.slice(0, MAX_PAGES));
+      setter(all.slice(0, MAX_PAGES));
     } catch (err) {
       setError(err.message || "Could not read this file.");
     }
     setBusy(false);
   }
 
-  const handleRemove = (id) => setPages((prev) => prev.filter((p) => p.id !== id));
+  const handleRemove = (id, kind = "work") =>
+    (kind === "book" ? setBookPages : setPages)((prev) => prev.filter((p) => p.id !== id));
 
   async function handleStart() {
     if (!API_KEY) {
@@ -64,7 +68,8 @@ export default function App() {
       const data = await scanWorksheet(
         pages.map((p) => p.b64),
         info,
-        setMsg
+        setMsg,
+        bookPages.map((p) => p.b64)
       );
       setPaper(data);
       setAnswers({});
@@ -105,6 +110,7 @@ export default function App() {
   function handleReset() {
     setStep("info");
     setPages([]);
+    setBookPages([]);
     setPaper(null);
     setResult(null);
     setAnswers({});
@@ -118,6 +124,7 @@ export default function App() {
         info={info}
         setInfo={setInfo}
         pages={pages}
+        bookPages={bookPages}
         busy={busy}
         error={error}
         onAdd={handleAdd}
@@ -131,6 +138,7 @@ export default function App() {
       <QuizScreen
         paper={paper}
         info={info}
+        pages={pages}
         answers={answers}
         setAnswers={setAnswers}
         error={error}
