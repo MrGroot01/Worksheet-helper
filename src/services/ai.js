@@ -18,7 +18,10 @@ function extractJson(text) {
   return JSON.parse(clean.slice(start, end + 1));
 }
 
-async function callGroq(content) {
+let notify = () => {};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function callGroq(content, tries = 6) {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -33,6 +36,19 @@ async function callGroq(content) {
     }),
   });
   const data = await res.json();
+
+  // free-tier limit: wait the time Groq asks for, then try again
+  if (res.status === 429 && tries > 0) {
+    const m = /try again in (?:(\d+)m)?([\d.]+)s/i.exec(data.error?.message || "");
+    const secs = m ? Number(m[1] || 0) * 60 + parseFloat(m[2]) : 20;
+    const wait = Math.min(Math.ceil(secs) + 2, 65);
+    for (let s = wait; s > 0; s--) {
+      notify(`Taking a short rest, free limit ⏳ ${s}s`);
+      await sleep(1000);
+    }
+    return callGroq(content, tries - 1);
+  }
+
   if (!res.ok) throw new Error(data.error?.message || "API error");
   return extractJson(data.choices?.[0]?.message?.content || "");
 }
@@ -109,6 +125,7 @@ async function solve(paper, info) {
 }
 
 export async function scanWorksheet(pages, info = {}, onProgress = () => {}) {
+  notify = onProgress;
   const sections = [];
   let title = "";
 
