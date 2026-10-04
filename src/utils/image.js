@@ -2,8 +2,7 @@ import * as pdfjs from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-
-export function fileToBase64(file, max = 1600) {
+export async function pdfToBase64List(file, maxPages = 6, max = 1100) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
