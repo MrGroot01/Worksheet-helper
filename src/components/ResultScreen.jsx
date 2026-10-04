@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import Confetti from "./Confetti";
-import { clean } from "../utils/text";
+import { clean, pretty } from "../utils/text";
 
 function useCountUp(target, ms = 1300) {
   const [v, setV] = useState(0);
@@ -127,14 +127,14 @@ export default function ResultScreen({ paper, info, answers, result, onReset }) 
               >
                 <div className="rhead">
                   <span className="rico">{skipped ? "➖" : right ? "✅" : "❌"}</span>
-                  <span className="rq">{clean(q.text)}</span>
+                  <span className="rq">{pretty(clean(q.text) || q.visual || "")}</span>
                   <span className="pts">{skipped ? "—" : right ? "+1 ⭐" : "0"}</span>
                 </div>
-                <div className="rline">You wrote: <b>{mine || "(blank)"}</b></div>
+                <div className="rline">You wrote: <b>{pretty(mine) || "(blank)"}</b></div>
                 {!skipped && !right && (
                   <div className="rfix">
                     {label}
-                    <b>{shown}</b>
+                    <b>{pretty(shown)}</b>
                   </div>
                 )}
                 {skipped && <div className="rline">The answer could not be found for this one, so it is not marked.</div>}

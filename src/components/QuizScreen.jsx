@@ -2,9 +2,11 @@ import { useState } from "react";
 import MatchSection from "./MatchSection";
 import FillSection from "./FillSection";
 import ShortSection from "./ShortSection";
+import ChoiceSection from "./ChoiceSection";
 
 const COLORS = ["#7c3aed", "#ec4899", "#f59e0b", "#10b981", "#3b82f6", "#ef4444"];
-const ICONS = { match: "🔗", fill: "✏️", short: "💬" };
+const ICONS = { match: "🔗", fill: "✏️", short: "💬", choice: "👆" };
+const SECTIONS = { match: MatchSection, fill: FillSection, choice: ChoiceSection };
 
 export default function QuizScreen({ paper, info, pages = [], answers, setAnswers, error, onSubmit }) {
   const [peek, setPeek] = useState(false);
@@ -36,7 +38,7 @@ export default function QuizScreen({ paper, info, pages = [], answers, setAnswer
       </div>
 
       {paper.sections.map((s, i) => {
-        const Section = s.type === "match" ? MatchSection : s.type === "fill" ? FillSection : ShortSection;
+        const Section = SECTIONS[s.type] || ShortSection;
         return (
           <div className="card" key={i}>
             <div className="sec-head" style={{ background: COLORS[i % COLORS.length] }}>

@@ -1,31 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import Visual from "./Visual";
 import { clean } from "../utils/text";
+import { beep } from "../utils/sound";
 
 const COLORS = ["#ef4444", "#f59e0b", "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1"];
 const norm = (s = "") => String(s).trim().toLowerCase();
 const curve = (x1, y1, x2, y2) => `M${x1},${y1} C${x1 + 50},${y1} ${x2 - 50},${y2} ${x2},${y2}`;
-
-function beep(ok) {
-  try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AC();
-    (ok ? [660, 880] : [220, 170]).forEach((f, i) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = ok ? "sine" : "square";
-      o.frequency.value = f;
-      g.gain.value = 0.07;
-      o.connect(g);
-      g.connect(ctx.destination);
-      const t = ctx.currentTime + i * 0.12;
-      o.start(t);
-      o.stop(t + 0.12);
-    });
-    setTimeout(() => ctx.close(), 600);
-  } catch {
-    /* sound is optional */
-  }
-}
 
 export default function MatchSection({ section, answers, setAnswer }) {
   const boxRef = useRef(null);
@@ -159,7 +139,7 @@ export default function MatchSection({ section, answers, setAnswer }) {
 
   return (
     <>
-      <p className="hint">👆 Tap a word, then tap its match. Green means right! Or drag a line.</p>
+      <p className="hint">👆 Tap one, then tap its match. Green means right! Or drag a line.</p>
       <div className="mt-progress">🌟 Matched {matched} of {qs.length}</div>
       <div className="match" ref={boxRef}>
         <svg className="match-svg">
@@ -187,7 +167,7 @@ export default function MatchSection({ section, answers, setAnswer }) {
               onPointerDown={(e) => onDown(e, q)}
             >
               <span className="badge">{n + 1}</span>
-              <span>{clean(q.text)}</span>
+              <Visual v={clean(q.text)} base={36} size={44} />
               {locked(q) && <span className="tick">✅</span>}
             </div>
           ))}
@@ -206,7 +186,7 @@ export default function MatchSection({ section, answers, setAnswer }) {
                 onClick={() => tapRight(idx)}
               >
                 <span className="badge">{String.fromCharCode(65 + idx)}</span>
-                <span>{opt}</span>
+                <Visual v={opt} base={36} size={44} />
                 {own && (
                   <>
                     <span className="tick">✅</span>

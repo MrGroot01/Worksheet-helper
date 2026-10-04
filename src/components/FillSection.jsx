@@ -33,7 +33,7 @@ export default function FillSection({ section, answers, setAnswer }) {
     const n = partsOf(q.text).length - 1;
     const a = q.answer || "";
     if (!a || /^\(guess\)/i.test(a) || /^e\.g\./i.test(a)) return null;
-    const parts = a.split(/[|,]/).map((x) => x.trim());
+    const parts = a.split(/\s*[|,;]\s*|\s+and\s+/i).map((x) => x.trim()).filter(Boolean);
     return parts.length === n ? parts : null;
   };
 
@@ -113,11 +113,12 @@ export default function FillSection({ section, answers, setAnswer }) {
     }
   };
 
-  const typeWidth = (q) => {
+  const typeWidth = (q, i) => {
     const exp = expOf(q);
-    const len = (exp ? exp[0] : q.answer || "").length;
-    if (len && len <= 2) return "2.8em";
-    return `${Math.min(12, Math.max(6, len * 0.75 + 2))}em`;
+    const len = exp ? exp[i].length : 0;
+    if (!len) return "6em";
+    if (len <= 2) return "2.8em";
+    return `${Math.min(10, Math.max(4, len * 0.7 + 2))}em`;
   };
 
   return (
@@ -185,7 +186,7 @@ export default function FillSection({ section, answers, setAnswer }) {
                         ) : (
                           <input
                             className={`blank-in ${ok ? "ok" : ""} ${isBad ? "bad" : ""}`}
-                            style={{ width: typeWidth(q) }}
+                            style={{ width: typeWidth(q, i) }}
                             value={vals[i]}
                             maxLength={20}
                             placeholder="✏️"

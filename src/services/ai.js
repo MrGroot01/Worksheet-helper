@@ -20,16 +20,22 @@ Images 1 to ${nWork} are the pages of one school worksheet, in order.${
 Rebuild the worksheet as a BLANK one (IGNORE any handwritten answers, ticks, circles or lines drawn by a student) and ALSO solve every question yourself. Never leave an answer empty.
 Think like the textbook and like a young child, not like a general adult. Keep answers short and in simple words.
 Return ONLY JSON:
-{"title":"","sections":[{"title":"section heading with instruction","type":"match|fill|short","wordBox":["..."],"options":["..."],"emojis":{"Hand":"✋"},"questions":[{"text":"question text","answer":"correct answer","open":false,"count":1}]}]}
+{"title":"","sections":[{"title":"section heading with instruction","type":"match|fill|short|choice","wordBox":["..."],"options":["..."],"questions":[{"text":"question text","answer":"correct answer","open":false,"count":1,"visual":"","scale":1,"choices":["..."]}]}]}
 Rules:
 - Do NOT put question numbers inside "text".
-- match: "options" = right column words; each question text = left word; answer = EXACTLY one word from "options", each option used only once, matched by meaning.
+- match: "options" = right column items; each question text = left item; answer = EXACTLY one of "options", each option used only once, matched by meaning. If the items are pictures, write each one as an emoji or as shape:name (see pictures below), for example left "shape:triangle" and right "🍕".
 - fill: put "____" exactly where the blank is and keep the rest of the sentence. If a word box exists put it in "wordBox" and answer = EXACTLY a word or letter from it. For a letter blank (like "____ air") answer = only the missing letter(s). If one question has several blanks, answer = the missing values in order separated by | (example: 2|5).
-- short: questions that need a written answer, including number names, True/False (answer T or F) and rearrange-the-letters type questions. One correct answer: write it briefly.
-- OPEN questions have MANY correct answers: rhyming words (example: "Pan -- ____"), "write 5 food items you like", "your favourite ...", "write a word that starts with...". For these set "open": true, give up to 3 example answers separated by commas in "answer" (example: "fan, man, can"), and use type short (or fill with a blank).
+- short: questions that need a written answer, including number names and rearrange-the-letters questions. One correct answer: write it briefly.
+- choice: questions the child answers by TAPPING one option. Use it for picture questions (count and circle, which group has more or less, big or small, tall or short, identify the shape), True/False (choices ["T","F"], answer T or F) and compare symbols (text keeps "____" like "13 ____ 31", choices ["<",">","="]). Put the options in "choices"; answer = EXACTLY one of them. A section made only of such questions has type "choice".
+- Pictures: the child cannot see the original pictures, so REDRAW them with emojis in "visual" or in "choices", repeating the emoji exactly as many times as the picture shows (3 pencils = "✏️✏️✏️"). For a shape picture use shape:square, shape:rectangle, shape:triangle, shape:circle, shape:oval, shape:star or shape:diamond. If the same object is shown in different sizes (big/small, tall/short), use the SAME emoji for each and set "scale" (small 0.6, normal 1, big 1.6).
+- Which group has more: one question per pair, text "", "choices" = the two groups drawn with emojis (example ["🍎🍎","🍎"]), answer = the bigger group exactly as written in choices.
+- Count and circle: text "How many?", "visual" = the objects drawn, "choices" = the numbers printed under the picture, answer = the correct count.
+- Identify the shape: "visual" = shape:name, choices = ["square","rectangle","triangle","circle"], answer = the right name.
+- Big or small / tall or short: "visual" = the object, scale set as above, choices ["big","small"] or ["tall","short"].
+- Colouring or drawing tasks cannot be done on screen: skip them.
+- OPEN questions have MANY correct answers: rhyming words (example: "Pan -- ____"), "write 5 food items you like", "your favourite ...". For these set "open": true, give up to 3 example answers separated by commas in "answer" (example: "fan, man, can"), and use type short (or fill with a blank). Never mark maths questions open.
 - "Write N items" questions (like "Write the names of 5 food items that you like to eat", even if the page shows N numbered lines): make ONE question only, with "open": true and "count": N. Do not make N separate questions.
 - Maths: work out every sum carefully and double-check it. Write number names in simple lowercase words (example: forty-two).
-- Picture questions (count and circle, big or small, tall or short, shapes, colouring, circle the group): the child can look at the original page, so write the question in words (example: "How many books are there?" or "Which group has more, 1 or 2?") as type short and give the answer.
 - Questions about a story or lesson: ${
     hasSource
       ? "answer ONLY from the lesson text / textbook pages, using the exact words and names written there (for example the exact place name like Tamil Nadu, never a general word like village or city). Do not add (guess)."
@@ -98,15 +104,26 @@ export async function scanWorksheet(pages, info = {}, onProgress = () => {}, boo
     title: raw.title || "",
     sections: (raw.sections || [])
       .filter((s) => (s.questions || []).length)
-      .map((s, si) => ({
-        ...s,
-        questions: s.questions.map((q, qi) => {
+      .map((s, si) => {
+        const questions = s.questions.map((q, qi) => {
           let answer = String(q.answer ?? "").trim() || "(guess) ";
           // open questions: keep the "e.g." marker so any valid answer is accepted
           if (q.open && !/^e\.g\./i.test(answer)) answer = `e.g. ${answer}`;
-          return { ...q, id: `s${si}q${qi}`, answer, count: Number(q.count) || 1 };
-        }),
-      })),
+          const choices = Array.isArray(q.choices) ? q.choices.map((c) => String(c)).filter(Boolean) : [];
+          return {
+            ...q,
+            id: `s${si}q${qi}`,
+            answer,
+            count: Number(q.count) || 1,
+            choices,
+            visual: q.visual ? String(q.visual) : "",
+            scale: Number(q.scale) || 1,
+          };
+        });
+        const allChoice = questions.every((q) => q.choices.length >= 2);
+        const type = s.type === "match" ? "match" : allChoice ? "choice" : s.type;
+        return { ...s, type, questions };
+      }),
   };
 
   if (!paper.sections.length)
