@@ -1,6 +1,8 @@
 const MODELS = [
   import.meta.env.VITE_GEMINI_MODEL || "gemini-3.8-flash",
-  "gemini-3.7-flash", // backup when the main model is busy
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
 ];
 export const API_KEY = import.meta.env.VITE_API_KEY;
 
@@ -13,13 +15,13 @@ function contextText(info = {}) {
   return lines.join("\n");
 }
 
-function scanPrompt(info = {}, nWork = 1, nBook = 0) {
+function scanPrompt(info = {}, nWork = 1, nBook = 0, note = "") {
   const hasSource = !!info.story?.trim() || nBook > 0;
   return `${contextText(info)}
 
-Images 1 to ${nWork} are the pages of one school worksheet, in order.${
-    nBook > 0 ? ` Images ${nWork + 1} to ${nWork + nBook} are pages from the child's TEXTBOOK lesson.` : ""
-  }
+Image 1${nWork > 1 ? ` to ${nWork} are pages` : " is a page"} of a school worksheet.${
+    nBook > 0 ? ` The images after ${nWork > 1 ? "them" : "it"} are pages from the child's TEXTBOOK lesson.` : ""
+  } ${note}
 Rebuild the worksheet as a BLANK one (IGNORE any handwritten answers, ticks, circles or lines drawn by a student) and ALSO solve every question yourself. Never leave an answer empty.
 Think like the textbook and like a young child, not like a general adult. Keep answers short and in simple words.
 Return ONLY JSON:
@@ -61,25 +63,33 @@ const BUSY = [429, 500, 502, 503, 504];
 async function callGemini(parts) {
   let lastMsg = "";
   for (let round = 0; round < 3; round++) {
-    let wait = 10 + round * 10;
+    let wait = 8 + round * 8;
+    let sawBusy = false;
 
     for (const model of MODELS) {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json", "x-goog-api-key": API_KEY },
-          body: JSON.stringify({
-            contents: [{ parts }],
-            generationConfig: {
-              responseMimeType: "application/json",
-              temperature: 0.2,
-              thinkingConfig: { thinkingLevel: "low" },
-            },
-          }),
-        }
-      );
-      const data = await res.json().catch(() => ({}));
+      let res;
+      let data = {};
+      try {
+        res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-goog-api-key": API_KEY },
+            body: JSON.stringify({
+              contents: [{ parts }],
+              generationConfig: {
+                responseMimeType: "application/json",
+                temperature: 0.2,
+                thinkingConfig: { thinkingLevel: "low" },
+              },
+            }),
+          }
+        );
+        data = await res.json().catch(() => ({}));
+      } catch {
+        sawBusy = true; // network hiccup: treat like busy
+        continue;
+      }
 
       if (res.ok) {
         const text = (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
@@ -87,14 +97,17 @@ async function callGemini(parts) {
       }
 
       lastMsg = data.error?.message || "API error";
+      const gone = res.status === 404 || /no longer available|not found/i.test(lastMsg);
+      if (gone) continue; // this model is not available for this key: try the next one
       if (!BUSY.includes(res.status)) throw new Error(lastMsg); // a real error: show it
 
+      sawBusy = true;
       const m = /retry in ([\d.]+)s/i.exec(lastMsg);
       if (m) wait = Math.min(Math.ceil(parseFloat(m[1])) + 1, 60);
-      // busy: try the next model straight away
     }
 
-    // every model was busy: rest, then try again
+    if (!sawBusy) throw new Error(lastMsg || "No AI model is available for this key.");
+
     for (let s = wait; s > 0; s--) {
       notify(`The AI is busy, trying again ⏳ ${s}s`);
       await sleep(1000);
@@ -105,19 +118,30 @@ async function callGemini(parts) {
 
 export async function scanWorksheet(pages, info = {}, onProgress = () => {}, bookPages = []) {
   notify = onProgress;
-  onProgress("Reading your worksheet... 🔍");
-
   const img = (b64) => ({ inline_data: { mime_type: "image/jpeg", data: b64 } });
-  const parts = [
-    ...pages.map(img),
-    ...bookPages.map(img),
-    { text: scanPrompt(info, pages.length, bookPages.length) },
-  ];
-  const raw = await callGemini(parts);
+
+  const sections = [];
+  let title = "";
+
+  // one page at a time: smaller requests pass more often
+  for (let i = 0; i < pages.length; i++) {
+    onProgress(`Reading page ${i + 1} of ${pages.length}... 🔍`);
+    const note =
+      pages.length > 1
+        ? `This is page ${i + 1} of ${pages.length} of the worksheet. Rebuild only what is on this page.`
+        : "";
+    const raw = await callGemini([
+      img(pages[i]),
+      ...bookPages.map(img),
+      { text: scanPrompt(info, 1, bookPages.length, note) },
+    ]);
+    if (!title && raw.title) title = raw.title;
+    (raw.sections || []).forEach((s) => sections.push(s));
+  }
 
   const paper = {
-    title: raw.title || "",
-    sections: (raw.sections || [])
+    title,
+    sections: sections
       .filter((s) => (s.questions || []).length)
       .map((s, si) => {
         const questions = s.questions.map((q, qi) => {
